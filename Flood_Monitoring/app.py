@@ -4,7 +4,7 @@ import encodings.idna
 
 import os
 import json
-import time
+import socket
 from datetime import datetime
 
 from flask import Flask, render_template, jsonify
@@ -44,7 +44,7 @@ latest_data = {
 
 
 # ==========================================
-# MQTT CONNECTION CALLBACKS
+# MQTT CALLBACKS
 # ==========================================
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
@@ -52,7 +52,6 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
     print("MQTT CONNECTION RESULT:", reason_code)
 
     if reason_code == 0:
-
         print("MQTT CONNECTED SUCCESSFULLY!")
 
         result = client.subscribe(MQTT_TOPIC)
@@ -61,7 +60,6 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
         print("SUBSCRIBED TO:", MQTT_TOPIC)
 
     else:
-
         print("MQTT CONNECTION FAILED:", reason_code)
 
 
@@ -75,22 +73,12 @@ def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=No
     print("MQTT DISCONNECTED:", reason_code)
 
 
-def on_log(client, userdata, level, buf):
-
-    print("MQTT DEBUG:", buf)
-
-
-# ==========================================
-# RECEIVE ESP32 SENSOR DATA
-# ==========================================
-
 def on_message(client, userdata, msg):
 
     global latest_data
 
     try:
-
-        print("MQTT MESSAGE RECEIVED ON:", msg.topic)
+        print("MQTT MESSAGE RECEIVED:", msg.topic)
 
         data = json.loads(msg.payload.decode("utf-8"))
 
@@ -101,8 +89,12 @@ def on_message(client, userdata, msg):
         print("RECEIVED ESP32 DATA:", latest_data)
 
     except Exception as e:
+        print("ERROR PARSING MQTT MESSAGE:", repr(e))
 
-        print("ERROR PARSING MQTT MESSAGE:", e)
+
+def on_log(client, userdata, level, buf):
+
+    print("MQTT DEBUG:", buf)
 
 
 # ==========================================
@@ -128,11 +120,52 @@ mqtt_client.reconnect_delay_set(
 
 
 # ==========================================
-# START MQTT CONNECTION
+# DNS CONNECTIVITY TEST
+# ==========================================
+
+print("================================")
+print("CHECKING MQTT NETWORK CONNECTION")
+print("================================")
+
+try:
+    addresses = socket.getaddrinfo(
+        MQTT_BROKER,
+        MQTT_PORT,
+        type=socket.SOCK_STREAM
+    )
+
+    print("DNS RESOLUTION SUCCESSFUL")
+    print("BROKER ADDRESS:", addresses[0][4])
+
+except Exception as e:
+    print("DNS RESOLUTION FAILED:", repr(e))
+
+
+# ==========================================
+# TCP CONNECTIVITY TEST
 # ==========================================
 
 try:
+    print("TESTING TCP CONNECTION TO MQTT BROKER...")
 
+    connection = socket.create_connection(
+        (MQTT_BROKER, MQTT_PORT),
+        timeout=8
+    )
+
+    print("TCP CONNECTION SUCCESSFUL!")
+
+    connection.close()
+
+except Exception as e:
+    print("TCP CONNECTION FAILED:", repr(e))
+
+
+# ==========================================
+# START MQTT CLIENT
+# ==========================================
+
+try:
     print("STARTING MQTT CLIENT...")
     print("BROKER:", MQTT_BROKER)
     print("PORT:", MQTT_PORT)
@@ -146,9 +179,10 @@ try:
 
     mqtt_client.loop_start()
 
-except Exception as e:
+    print("MQTT CLIENT STARTED SUCCESSFULLY")
 
-    print("MQTT START ERROR:", e)
+except Exception as e:
+    print("MQTT START ERROR:", repr(e))
 
 
 # ==========================================
@@ -157,13 +191,11 @@ except Exception as e:
 
 @app.route("/")
 def index():
-
     return render_template("index.html")
 
 
 @app.route("/api/data")
 def get_data():
-
     return jsonify(latest_data)
 
 
@@ -173,6 +205,7 @@ def mqtt_status():
     return jsonify({
         "mqtt_connected": mqtt_client.is_connected(),
         "broker": MQTT_BROKER,
+        "port": MQTT_PORT,
         "topic": MQTT_TOPIC,
         "latest_data": latest_data
     })
