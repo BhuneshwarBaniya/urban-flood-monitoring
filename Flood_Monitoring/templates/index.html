@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Urban Flood Monitoring System</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            margin: 0;
+            padding: 2rem;
+            text-align: center;
+        }
+        .risk-banner {
+            padding: 1.2rem;
+            border-radius: 12px;
+            font-size: 1.6rem;
+            font-weight: 700;
+            max-width: 800px;
+            margin: 0 auto 2rem;
+            transition: background 0.3s;
+        }
+        .risk-0 { background: #16a34a; } /* NORMAL - Green */
+        .risk-1 { background: #ca8a04; } /* WATCH - Yellow */
+        .risk-2 { background: #ea580c; } /* WARNING - Orange */
+        .risk-3 { background: #dc2626; } /* CRITICAL - Red */
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.2rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .card {
+            background: #1e293b;
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 1px solid #334155;
+        }
+        .card h3 {
+            margin: 0 0 0.5rem;
+            font-size: 0.95rem;
+            color: #94a3b8;
+            text-transform: uppercase;
+        }
+        .value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+        .footer {
+            margin-top: 2rem;
+            color: #64748b;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Urban Flood Warning Dashboard</h1>
+
+    <div id="risk-banner" class="risk-banner risk-0">
+        STATUS: <span id="risk_label">WAITING FOR DATA</span>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <h3>Water Depth</h3>
+            <div class="value"><span id="water_depth">0</span> cm</div>
+        </div>
+        <div class="card">
+            <h3>Rise Rate</h3>
+            <div class="value"><span id="rise_rate">0</span> cm/min</div>
+        </div>
+        <div class="card">
+            <h3>Sensor Distance</h3>
+            <div class="value"><span id="distance">0</span> cm</div>
+        </div>
+        <div class="card">
+            <h3>Rain Wetness</h3>
+            <div class="value"><span id="wetness">0</span> %</div>
+        </div>
+        <div class="card">
+            <h3>Rain Status</h3>
+            <div class="value" id="rain_detected">No</div>
+        </div>
+        <div class="card">
+            <h3>Buzzer Alarm</h3>
+            <div class="value" id="buzzer">OFF</div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Last Updated: <span id="last_updated">Never</span>
+    </div>
+
+    <script>
+        async function fetchTelemetry() {
+            try {
+                const res = await fetch('/api/data');
+                const data = await res.json();
+
+                document.getElementById('risk_label').innerText = data.risk_label;
+                document.getElementById('water_depth').innerText = data.water_depth;
+                document.getElementById('rise_rate').innerText = data.rise_rate;
+                document.getElementById('distance').innerText = data.distance;
+                document.getElementById('wetness').innerText = data.wetness;
+                document.getElementById('rain_detected').innerText = data.rain_detected ? 'Raining' : 'Dry';
+                document.getElementById('buzzer').innerText = data.buzzer;
+                document.getElementById('last_updated').innerText = data.last_updated;
+
+                const banner = document.getElementById('risk-banner');
+                banner.className = 'risk-banner risk-' + data.risk_code;
+            } catch (err) {
+                console.error("Failed to fetch telemetry:", err);
+            }
+        }
+
+        setInterval(fetchTelemetry, 1000);
+        fetchTelemetry();
+    </script>
+</body>
+</html>
