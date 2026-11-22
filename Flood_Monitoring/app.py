@@ -1,4 +1,8 @@
 import encodings.idna
+
+# Register the IDNA codec before Gunicorn starts handling requests
+"test".encode("idna")
+
 import os
 import json
 from datetime import datetime
