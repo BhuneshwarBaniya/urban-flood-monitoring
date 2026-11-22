@@ -31,9 +31,15 @@ latest_data = {
 }
 
 # MQTT Callbacks
-def on_connect(client, userdata, flags, rc, properties=None):
-    print("Connected to MQTT Broker with result code:", rc)
-    client.subscribe(MQTT_TOPIC)
+def on_connect(client, userdata, flags, reason_code, properties=None):
+    print("MQTT CONNECTION RESULT:", reason_code)
+
+    if reason_code == 0:
+        print("MQTT CONNECTED SUCCESSFULLY!")
+        client.subscribe(MQTT_TOPIC)
+        print("SUBSCRIBED TO:", MQTT_TOPIC)
+    else:
+        print("MQTT CONNECTION FAILED!")
 
 def on_message(client, userdata, msg):
     global latest_data
