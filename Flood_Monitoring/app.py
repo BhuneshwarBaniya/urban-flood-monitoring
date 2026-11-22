@@ -2,20 +2,24 @@
 import encodings.idna
 "test".encode("idna")
 
-import os
 import json
 import socket
+import threading
 from datetime import datetime
 
 from flask import Flask, render_template, jsonify
 import paho.mqtt.client as mqtt
 
 
+# ==========================================
+# 1. FLASK CONFIGURATION
+# ==========================================
+
 app = Flask(__name__)
 
 
 # ==========================================
-# MQTT CONFIGURATION
+# 2. MQTT CONFIGURATION
 # ==========================================
 
 MQTT_BROKER = "broker.hivemq.com"
@@ -26,7 +30,7 @@ MQTT_CLIENT_ID = "flood_monitor_flask_server"
 
 
 # ==========================================
-# LATEST SENSOR DATA
+# 3. LATEST SENSOR DATA
 # ==========================================
 
 latest_data = {
@@ -42,25 +46,94 @@ latest_data = {
     "last_updated": "Never"
 }
 
+data_lock = threading.Lock()
+
+mqtt_connected = False
+mqtt_client = None
+
 
 # ==========================================
-# MQTT CALLBACKS
+# 4. MQTT CALLBACKS
 # ==========================================
 
-def on_connect(client, userdata, flags, reason_code, properties=None):
+def on_connect(client, userdata, flags, reason_code, properties):
 
-    print("MQTT CONNECTION RESULT:", reason_code)
+    global mqtt_connected
+
+    print("================================")
+    print("MQTT CONNECTION CALLBACK")
+    print("Connection result:", reason_code)
 
     if reason_code == 0:
-        print("MQTT CONNECTED SUCCESSFULLY!")
 
-        result = client.subscribe(MQTT_TOPIC)
+        mqtt_connected = True
+
+        print("MQTT CONNECTED SUCCESSFULLY!")
+        print("Broker:", MQTT_BROKER)
+        print("Topic:", MQTT_TOPIC)
+
+        result, mid = client.subscribe(MQTT_TOPIC)
 
         print("SUBSCRIBE RESULT:", result)
-        print("SUBSCRIBED TO:", MQTT_TOPIC)
+        print("SUBSCRIBE MESSAGE ID:", mid)
 
     else:
-        print("MQTT CONNECTION FAILED:", reason_code)
+
+        mqtt_connected = False
+
+        print("MQTT CONNECTION REJECTED:", reason_code)
+
+    print("================================")
+
+
+def on_disconnect(
+    client,
+    userdata,
+    disconnect_flags,
+    reason_code,
+    properties
+):
+
+    global mqtt_connected
+
+    mqtt_connected = False
+
+    print("MQTT DISCONNECTED!")
+    print("Reason:", reason_code)
+
+
+def on_message(client, userdata, message):
+
+    global latest_data
+
+    try:
+
+        print("================================")
+        print("MQTT MESSAGE RECEIVED!")
+        print("Topic:", message.topic)
+
+        received_data = json.loads(
+            message.payload.decode("utf-8")
+        )
+
+        with data_lock:
+
+            latest_data.update(received_data)
+
+            latest_data["last_updated"] = (
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+
+            current_data = dict(latest_data)
+
+        print("UPDATED SENSOR DATA:")
+        print(current_data)
+
+        print("================================")
+
+    except Exception as e:
+
+        print("MESSAGE PROCESSING ERROR:", repr(e))
 
 
 def on_connect_fail(client, userdata):
@@ -68,160 +141,191 @@ def on_connect_fail(client, userdata):
     print("MQTT CONNECTION ATTEMPT FAILED!")
 
 
-def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):
-
-    print("MQTT DISCONNECTED:", reason_code)
-
-
-def on_message(client, userdata, msg):
-
-    global latest_data
-
-    try:
-        print("MQTT MESSAGE RECEIVED:", msg.topic)
-
-        data = json.loads(msg.payload.decode("utf-8"))
-
-        data["last_updated"] = datetime.now().strftime("%H:%M:%S")
-
-        latest_data.update(data)
-
-        print("RECEIVED ESP32 DATA:", latest_data)
-
-    except Exception as e:
-        print("ERROR PARSING MQTT MESSAGE:", repr(e))
-
-
-def on_log(client, userdata, level, buf):
-
-    print("MQTT DEBUG:", buf)
-
-
 # ==========================================
-# CREATE MQTT CLIENT
+# 5. MQTT CLIENT SETUP
 # ==========================================
 
-mqtt_client = mqtt.Client(
-    callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-    client_id=MQTT_CLIENT_ID,
-    protocol=mqtt.MQTTv311
-)
+def start_mqtt():
 
-mqtt_client.on_connect = on_connect
-mqtt_client.on_connect_fail = on_connect_fail
-mqtt_client.on_disconnect = on_disconnect
-mqtt_client.on_message = on_message
-mqtt_client.on_log = on_log
+    global mqtt_client
 
-mqtt_client.reconnect_delay_set(
-    min_delay=1,
-    max_delay=30
-)
-
-
-# ==========================================
-# DNS CONNECTIVITY TEST
-# ==========================================
-
-print("================================")
-print("CHECKING MQTT NETWORK CONNECTION")
-print("================================")
-
-try:
-    addresses = socket.getaddrinfo(
-        MQTT_BROKER,
-        MQTT_PORT,
-        type=socket.SOCK_STREAM
-    )
-
-    print("DNS RESOLUTION SUCCESSFUL")
-    print("BROKER ADDRESS:", addresses[0][4])
-
-except Exception as e:
-    print("DNS RESOLUTION FAILED:", repr(e))
-
-
-# ==========================================
-# TCP CONNECTIVITY TEST
-# ==========================================
-
-try:
-    print("TESTING TCP CONNECTION TO MQTT BROKER...")
-
-    connection = socket.create_connection(
-        (MQTT_BROKER, MQTT_PORT),
-        timeout=8
-    )
-
-    print("TCP CONNECTION SUCCESSFUL!")
-
-    connection.close()
-
-except Exception as e:
-    print("TCP CONNECTION FAILED:", repr(e))
-
-
-# ==========================================
-# START MQTT CLIENT
-# ==========================================
-
-try:
-    print("STARTING MQTT CLIENT...")
+    print("================================")
+    print("STARTING MQTT CLIENT")
     print("BROKER:", MQTT_BROKER)
     print("PORT:", MQTT_PORT)
     print("TOPIC:", MQTT_TOPIC)
+    print("================================")
 
-    mqtt_client.connect_async(
-        MQTT_BROKER,
-        MQTT_PORT,
-        keepalive=60
-    )
+    try:
 
-    mqtt_client.loop_start()
+        # Check DNS resolution
 
-    print("MQTT CLIENT STARTED SUCCESSFULLY")
+        print("CHECKING BROKER DNS...")
 
-except Exception as e:
-    print("MQTT START ERROR:", repr(e))
+        addresses = socket.getaddrinfo(
+            MQTT_BROKER,
+            MQTT_PORT,
+            type=socket.SOCK_STREAM
+        )
+
+        print("DNS SUCCESSFUL:", addresses[0][4])
+
+        # Check TCP connection
+
+        print("CHECKING TCP CONNECTION...")
+
+        connection = socket.create_connection(
+            (MQTT_BROKER, MQTT_PORT),
+            timeout=8
+        )
+
+        connection.close()
+
+        print("TCP CONNECTION SUCCESSFUL!")
+
+    except Exception as e:
+
+        print("NETWORK CHECK ERROR:", repr(e))
+
+
+    try:
+
+        mqtt_client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            client_id=MQTT_CLIENT_ID,
+            protocol=mqtt.MQTTv311
+        )
+
+        mqtt_client.on_connect = on_connect
+        mqtt_client.on_disconnect = on_disconnect
+        mqtt_client.on_message = on_message
+        mqtt_client.on_connect_fail = on_connect_fail
+
+        mqtt_client.reconnect_delay_set(
+            min_delay=1,
+            max_delay=30
+        )
+
+        print("CONNECTING TO MQTT BROKER...")
+
+        # First attempt: direct connection
+
+        try:
+
+            result = mqtt_client.connect(
+                MQTT_BROKER,
+                MQTT_PORT,
+                keepalive=60
+            )
+
+            print("MQTT CONNECT RETURN CODE:", result)
+
+            mqtt_client.loop_start()
+
+            print("MQTT NETWORK LOOP STARTED!")
+
+        except Exception as direct_error:
+
+            print(
+                "DIRECT CONNECTION FAILED:",
+                repr(direct_error)
+            )
+
+            # Fallback: asynchronous connection
+
+            print("TRYING ASYNCHRONOUS CONNECTION...")
+
+            mqtt_client.connect_async(
+                MQTT_BROKER,
+                MQTT_PORT,
+                keepalive=60
+            )
+
+            mqtt_client.loop_start()
+
+            print("ASYNC MQTT LOOP STARTED!")
+
+    except Exception as e:
+
+        print("MQTT STARTUP ERROR:", repr(e))
+
+        mqtt_client = None
 
 
 # ==========================================
-# FLASK ROUTES
+# 6. DASHBOARD ROUTE
 # ==========================================
 
 @app.route("/")
-def index():
+def home():
+
     return render_template("index.html")
 
 
+# ==========================================
+# 7. SENSOR DATA API
+# ==========================================
+
 @app.route("/api/data")
 def get_data():
-    return jsonify(latest_data)
 
+    with data_lock:
+
+        data = dict(latest_data)
+
+    return jsonify(data)
+
+
+# ==========================================
+# 8. MQTT STATUS API
+# ==========================================
 
 @app.route("/api/status")
-def mqtt_status():
+def get_status():
+
+    connected = False
+
+    if mqtt_client is not None:
+
+        try:
+
+            connected = mqtt_client.is_connected()
+
+        except Exception:
+
+            connected = False
 
     return jsonify({
-        "mqtt_connected": mqtt_client.is_connected(),
+
         "broker": MQTT_BROKER,
+
         "port": MQTT_PORT,
+
         "topic": MQTT_TOPIC,
-        "latest_data": latest_data
+
+        "mqtt_connected": connected,
+
+        "latest_data": dict(latest_data)
+
     })
 
 
 # ==========================================
-# RUN FLASK APPLICATION
+# 9. START MQTT
+# ==========================================
+
+start_mqtt()
+
+
+# ==========================================
+# 10. RUN FLASK LOCALLY
 # ==========================================
 
 if __name__ == "__main__":
 
-    port = int(os.environ.get("PORT", 5000))
-
     app.run(
         host="0.0.0.0",
-        port=port,
+        port=5000,
         debug=False,
         use_reloader=False
     )
