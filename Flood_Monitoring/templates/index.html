@@ -9,6 +9,10 @@
     <title>Urban Flood Monitoring System</title>
 
     <style>
+        * {
+            box-sizing: border-box;
+        }
+
         body {
             font-family: system-ui, sans-serif;
             background: #0f172a;
@@ -19,17 +23,33 @@
         }
 
         h1 {
-            margin-bottom: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        #connection_status {
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        .connected {
+            color: #22c55e;
+        }
+
+        .disconnected {
+            color: #ef4444;
+        }
+
+        .waiting {
+            color: #facc15;
         }
 
         .risk-banner {
             padding: 1.2rem;
             border-radius: 12px;
-            font-size: 1.6rem;
+            font-size: 1.5rem;
             font-weight: 700;
             max-width: 800px;
             margin: 0 auto 2rem;
-            transition: background 0.3s;
         }
 
         .risk-0 { background: #16a34a; }
@@ -39,7 +59,10 @@
 
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            grid-template-columns: repeat(
+                auto-fit,
+                minmax(220px, 1fr)
+            );
             gap: 1.2rem;
             max-width: 1200px;
             margin: 0 auto;
@@ -62,6 +85,7 @@
         .value {
             font-size: 2rem;
             font-weight: 700;
+            overflow-wrap: anywhere;
         }
 
         .footer {
@@ -70,17 +94,26 @@
             font-size: 0.9rem;
         }
 
-        #connection_status {
-            margin-bottom: 20px;
-            font-weight: 600;
+        .sensor-error {
+            color: #ef4444;
         }
 
-        .connected {
+        .sensor-ok {
             color: #22c55e;
         }
 
-        .disconnected {
-            color: #ef4444;
+        @media (max-width: 600px) {
+            body {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 1.5rem;
+            }
+
+            .risk-banner {
+                font-size: 1.2rem;
+            }
         }
     </style>
 </head>
@@ -89,12 +122,13 @@
 
     <h1>Urban Flood Warning Dashboard</h1>
 
-    <div id="connection_status" class="disconnected">
+    <div id="connection_status" class="waiting">
         Connecting to server...
     </div>
 
     <div id="risk-banner" class="risk-banner risk-0">
-        STATUS: <span id="risk_label">WAITING FOR DATA</span>
+        STATUS:
+        <span id="risk_label">WAITING FOR DATA</span>
     </div>
 
     <div class="grid">
@@ -102,21 +136,21 @@
         <div class="card">
             <h3>Water Depth</h3>
             <div class="value">
-                <span id="water_depth">0</span> cm
+                <span id="water_depth">0.00</span> cm
             </div>
         </div>
 
         <div class="card">
             <h3>Rise Rate</h3>
             <div class="value">
-                <span id="rise_rate">0</span> cm/min
+                <span id="rise_rate">0.00</span> cm/min
             </div>
         </div>
 
         <div class="card">
             <h3>Sensor Distance</h3>
             <div class="value">
-                <span id="distance">0</span> cm
+                <span id="distance">0.00</span> cm
             </div>
         </div>
 
@@ -141,6 +175,13 @@
             </div>
         </div>
 
+        <div class="card">
+            <h3>Ultrasonic Sensor</h3>
+            <div class="value" id="ultrasonic_status">
+                Waiting
+            </div>
+        </div>
+
     </div>
 
     <div class="footer">
@@ -152,7 +193,16 @@
     <script>
 
         // ==================================
-        // FETCH SENSOR DATA FROM FLASK
+        // GET ELEMENT
+        // ==================================
+
+        function setText(id, value) {
+            document.getElementById(id).innerText = value;
+        }
+
+
+        // ==================================
+        // FETCH SENSOR DATA AND MQTT STATUS
         // ==================================
 
         async function fetchTelemetry() {
@@ -162,88 +212,146 @@
 
             try {
 
-                const response = await fetch(
-                    "/api/data?t=" + Date.now(),
-                    { cache: "no-store" }
-                );
+                const responses = await Promise.all([
 
-                if (!response.ok) {
-                    throw new Error(
-                        "Server returned HTTP " + response.status
-                    );
+                    fetch("/api/data?t=" + Date.now(), {
+                        cache: "no-store"
+                    }),
+
+                    fetch("/api/status?t=" + Date.now(), {
+                        cache: "no-store"
+                    })
+
+                ]);
+
+                if (!responses[0].ok || !responses[1].ok) {
+                    throw new Error("Server returned an error");
                 }
 
-                const data = await response.json();
+                const data = await responses[0].json();
+                const mqttStatus = await responses[1].json();
 
-                if (!data || !data.last_updated ||
-                    data.last_updated === "Never") {
+
+                // ==================================
+                // MQTT CONNECTION STATUS
+                // ==================================
+
+                if (!mqttStatus.mqtt_connected) {
 
                     status.innerText =
-                        "Connected to server - Waiting for sensor data";
+                        "SERVER CONNECTED - MQTT DISCONNECTED";
 
                     status.className = "disconnected";
 
+                } else if (
+                    !data.last_updated ||
+                    data.last_updated === "Never"
+                ) {
+
+                    status.innerText =
+                        "MQTT CONNECTED - WAITING FOR SENSOR DATA";
+
+                    status.className = "waiting";
+
+                } else {
+
+                    status.innerText =
+                        "LIVE SENSOR DATA RECEIVED";
+
+                    status.className = "connected";
+
+                }
+
+
+                // ==================================
+                // WAIT IF NO SENSOR DATA
+                // ==================================
+
+                if (
+                    !data.last_updated ||
+                    data.last_updated === "Never"
+                ) {
                     return;
                 }
 
 
                 // ==================================
-                // UPDATE SENSOR VALUES
+                // SENSOR VALUES
                 // ==================================
 
-                document.getElementById("water_depth").innerText =
-                    Number(data.water_depth ?? 0).toFixed(2);
+                setText(
+                    "water_depth",
+                    Number(data.water_depth ?? 0).toFixed(2)
+                );
 
-                document.getElementById("rise_rate").innerText =
-                    Number(data.rise_rate ?? 0).toFixed(2);
+                setText(
+                    "rise_rate",
+                    Number(data.rise_rate ?? 0).toFixed(2)
+                );
 
-                document.getElementById("distance").innerText =
-                    Number(data.distance ?? 0).toFixed(2);
+                setText(
+                    "distance",
+                    Number(data.distance ?? 0).toFixed(2)
+                );
 
-                document.getElementById("wetness").innerText =
-                    Number(data.wetness ?? 0);
+                setText(
+                    "wetness",
+                    Number(data.wetness ?? 0)
+                );
 
-                document.getElementById("rain_detected").innerText =
-                    data.rain_detected ? "Raining" : "Dry";
+                setText(
+                    "rain_detected",
+                    data.rain_detected ? "RAINING" : "DRY"
+                );
 
-                document.getElementById("buzzer").innerText =
-                    data.buzzer ?? "OFF";
+                setText(
+                    "buzzer",
+                    data.buzzer ?? "OFF"
+                );
 
-                document.getElementById("last_updated").innerText =
-                    data.last_updated;
+                setText(
+                    "last_updated",
+                    data.last_updated
+                );
 
 
                 // ==================================
-                // UPDATE RISK STATUS
+                // ULTRASONIC STATUS
+                // ==================================
+
+                const ultrasonic =
+                    document.getElementById("ultrasonic_status");
+
+                if (data.ultrasonic_valid === false) {
+
+                    ultrasonic.innerText = "SENSOR ERROR";
+                    ultrasonic.className = "value sensor-error";
+
+                } else {
+
+                    ultrasonic.innerText = "WORKING";
+                    ultrasonic.className = "value sensor-ok";
+
+                }
+
+
+                // ==================================
+                // FLOOD RISK
                 // ==================================
 
                 const riskCode =
                     Number(data.risk_code ?? 0);
 
-                const banner =
-                    document.getElementById("risk-banner");
+                const safeRiskCode =
+                    Math.max(0, Math.min(3, riskCode));
 
-                const riskLabel =
-                    document.getElementById("risk_label");
+                setText(
+                    "risk_label",
+                    data.risk_label ?? "UNKNOWN"
+                );
 
-                riskLabel.innerText =
-                    data.risk_label ?? "UNKNOWN";
-
-                banner.className =
-                    "risk-banner risk-" +
-                    (riskCode >= 0 && riskCode <= 3
-                        ? riskCode
-                        : 0);
-
-
-                // ==================================
-                // CONNECTION STATUS
-                // ==================================
-
-                status.innerText =
-                    "LIVE DATA CONNECTED";
-
-                status.className = "connected";
+                document.getElementById("risk-banner").className =
+                    "risk-banner risk-" + safeRiskCode;
 
 
                 console.log("Sensor data updated:", data);
@@ -257,9 +365,7 @@
                     error
                 );
 
-                status.innerText =
-                    "SERVER CONNECTION ERROR";
-
+                status.innerText = "SERVER CONNECTION ERROR";
                 status.className = "disconnected";
 
             }
@@ -278,4 +384,5 @@
     </script>
 
 </body>
+
 </html>
