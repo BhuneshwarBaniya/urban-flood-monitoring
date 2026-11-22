@@ -6,22 +6,28 @@ import os
 import json
 import time
 from datetime import datetime
+
 from flask import Flask, render_template, jsonify
 import paho.mqtt.client as mqtt
 
+
 app = Flask(__name__)
 
-# =====================================
-# MQTT SETTINGS
-# =====================================
+
+# ==========================================
+# MQTT CONFIGURATION
+# ==========================================
 
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 MQTT_TOPIC = "flood_system/telemetry"
 
-# =====================================
+MQTT_CLIENT_ID = "flood_monitor_flask_server"
+
+
+# ==========================================
 # LATEST SENSOR DATA
-# =====================================
+# ==========================================
 
 latest_data = {
     "rain_raw": 0,
@@ -36,15 +42,17 @@ latest_data = {
     "last_updated": "Never"
 }
 
-# =====================================
-# MQTT CALLBACK FUNCTIONS
-# =====================================
+
+# ==========================================
+# MQTT CONNECTION CALLBACKS
+# ==========================================
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
 
     print("MQTT CONNECTION RESULT:", reason_code)
 
     if reason_code == 0:
+
         print("MQTT CONNECTED SUCCESSFULLY!")
 
         result = client.subscribe(MQTT_TOPIC)
@@ -53,7 +61,13 @@ def on_connect(client, userdata, flags, reason_code, properties=None):
         print("SUBSCRIBED TO:", MQTT_TOPIC)
 
     else:
+
         print("MQTT CONNECTION FAILED:", reason_code)
+
+
+def on_connect_fail(client, userdata):
+
+    print("MQTT CONNECTION ATTEMPT FAILED!")
 
 
 def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):
@@ -61,11 +75,23 @@ def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=No
     print("MQTT DISCONNECTED:", reason_code)
 
 
+def on_log(client, userdata, level, buf):
+
+    print("MQTT DEBUG:", buf)
+
+
+# ==========================================
+# RECEIVE ESP32 SENSOR DATA
+# ==========================================
+
 def on_message(client, userdata, msg):
 
     global latest_data
 
     try:
+
+        print("MQTT MESSAGE RECEIVED ON:", msg.topic)
+
         data = json.loads(msg.payload.decode("utf-8"))
 
         data["last_updated"] = datetime.now().strftime("%H:%M:%S")
@@ -79,46 +105,55 @@ def on_message(client, userdata, msg):
         print("ERROR PARSING MQTT MESSAGE:", e)
 
 
-# =====================================
-# START MQTT CLIENT
-# =====================================
+# ==========================================
+# CREATE MQTT CLIENT
+# ==========================================
 
 mqtt_client = mqtt.Client(
-    mqtt.CallbackAPIVersion.VERSION2,
-    client_id="flood_monitor_flask_server"
+    callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+    client_id=MQTT_CLIENT_ID,
+    protocol=mqtt.MQTTv311
 )
 
 mqtt_client.on_connect = on_connect
+mqtt_client.on_connect_fail = on_connect_fail
 mqtt_client.on_disconnect = on_disconnect
 mqtt_client.on_message = on_message
+mqtt_client.on_log = on_log
 
 mqtt_client.reconnect_delay_set(
     min_delay=1,
     max_delay=30
 )
 
+
+# ==========================================
+# START MQTT CONNECTION
+# ==========================================
+
 try:
+
+    print("STARTING MQTT CLIENT...")
+    print("BROKER:", MQTT_BROKER)
+    print("PORT:", MQTT_PORT)
+    print("TOPIC:", MQTT_TOPIC)
 
     mqtt_client.connect_async(
         MQTT_BROKER,
         MQTT_PORT,
-        60
+        keepalive=60
     )
 
     mqtt_client.loop_start()
-
-    print("MQTT CLIENT STARTED")
-    print("Connecting to:", MQTT_BROKER)
-    print("MQTT TOPIC:", MQTT_TOPIC)
 
 except Exception as e:
 
     print("MQTT START ERROR:", e)
 
 
-# =====================================
+# ==========================================
 # FLASK ROUTES
-# =====================================
+# ==========================================
 
 @app.route("/")
 def index():
@@ -137,14 +172,15 @@ def mqtt_status():
 
     return jsonify({
         "mqtt_connected": mqtt_client.is_connected(),
+        "broker": MQTT_BROKER,
         "topic": MQTT_TOPIC,
         "latest_data": latest_data
     })
 
 
-# =====================================
-# RUN APPLICATION
-# =====================================
+# ==========================================
+# RUN FLASK APPLICATION
+# ==========================================
 
 if __name__ == "__main__":
 
